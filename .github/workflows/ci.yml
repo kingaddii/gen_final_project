@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+jobs:
+  deploy:
+    name: Deploy ETL application
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: eu-west-1
+    # steps:
+    #   - name: extract
+    #     uses: src/app/extract.py
+    #   - name: list-dir
+    #     run: | 
+    #       echo "Hello =)"
+    #       ls
+    #   - name: list-s3
+    #     run: aws s3 ls
+
+
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-python@v2
+        with:
+          python-version: '3.9' 
+          architecture: 'x64' # optional x64 or x86. Defaults to x64 if not specified
+      - run: ./deploy_ci.sh
