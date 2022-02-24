@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >
+  Template to deploy a lambda which is triggered by an S3 event.
+
+Parameters:
+  NamePrefix:
+    Type: String
+    Description: Prefix to be used for creating uniquely named resources
+
+Resources:
+  LambdaFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+              - lambda.amazonaws.com
+          Action:
+            - sts:AssumeRole
+      Path: "/"
+      PermissionsBoundary: !Sub arn:aws:iam::${AWS::AccountId}:policy/ScopePermissions
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/AmazonSQSFullAccess
+      Policies:
+      - PolicyName: LambdaLogsPolicy
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+            Resource: '*'
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${NamePrefix}-etl-lambda
+      Runtime: python3.9
+      Timeout: 120
+      ReservedConcurrentExecutions: 1
+      Handler: app.lambda_function.lambda_handler
+      Role: !GetAtt LambdaFunctionRole.Arn
+      Code: .deployment/lambda-package.zip
+
+
+  CafeDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: team5-gen-cafe-data
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt LambdaFunction.Arn
+  
+  S3BucketPermission:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref LambdaFunction
+      Principal: s3.amazonaws.com
+      SourceArn: "arn:aws:s3:::team5-gen-cafe-data"
+
+
+  LoadLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${NamePrefix}-load-lambda
+      Runtime: python3.9
+      Timeout: 120
+      ReservedConcurrentExecutions: 1
+      Handler: app.load_lambda.load_handler
+      Role: !GetAtt LambdaFunctionRole.Arn
+      Code: .deployment/lambda-package.zip
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue:
+              'network-infra-VPCSGID'
+        SubnetIds:
+          - Fn::ImportValue:
+              !Sub 'network-infra-PrivateSubnet0ID'
+
+  CafeTransformedDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: team5-transformed-cafe-data
+      # NotificationConfiguration:
+      #   LambdaConfigurations:
+      #     - Event: s3:ObjectCreated:*
+      #       Function: !GetAtt LambdaFunction.Arn
+
+  LoadLambdaFunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 1
+      Enabled: true
+      EventSourceArn: !GetAtt LoadQueue.Arn
+      FunctionName: !GetAtt LoadLambdaFunction.Arn
+
+  LoadQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${NamePrefix}-load-queue
+      DelaySeconds: 0
+      VisibilityTimeout: 120
+      RedrivePolicy: 
+        deadLetterTargetArn: !GetAtt LoadDeadLetterQueue.Arn
+        maxReceiveCount: 10
+
+  LoadDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub ${NamePrefix}-load-queue-dlq
+
